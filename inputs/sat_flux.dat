@@ -1,0 +1,8 @@
+2013_151                 ! storm name
+2013p151                 ! outname or run name
+rbspa                    ! satellite
+_e                       ! species
+151                      ! day number corresponding to t=0
+73                       ! ntime in *.fls
+70 48 24 18              ! ir,ip,je,ig: dimension of data in *.fls file
+70 59 49                 ! nr,nth,nphi: dimension of data in *.rtp file

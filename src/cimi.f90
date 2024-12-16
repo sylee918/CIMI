@@ -690,6 +690,7 @@
       use tsy_plasma
       use dub_plasma
       use ModCurvScatt, only: iflc,tflc
+      use ModMate, only: MateFileName,iDoyStartMate,read_mate_data
       integer Kp8(8),iAp(8),iDst24(24),indx(24)
       real bxw1(ndmax),byw1(ndmax),bzw1(ndmax),xnsw1(ndmax),vsw1(ndmax)
       real AE1(ndmax),AL1(ndmax),coef1(6),coef2(2),coef4(4)
@@ -731,7 +732,8 @@
   read(4,*) iEMIC              ! 0=no EMIC, 1=with EMIC
   read(4,*) iEMICdiff          ! 0=no EMIC, 1=with EMIC diffusion
   read(4,*) iflc,tflc          ! 0=no FLC, 1=with FC; tflc=time to apply FLC
-  read(4,*) igeo               ! geocorona model: 1=Rairden, 2=Hodges
+  read(4,*) igeo               ! geocorona model: 1=Rairden, 2=Hodges, 3=MATE
+  if (igeo==3) read(4,*) MateFileName    ! MATE file name
   if (igeo.eq.1) close(4)
 
   rc=(re_m+hlosscone*1000.)/re_m       ! losscone in Re 
@@ -1088,6 +1090,10 @@
   DIPMOM=SQRT(G(2)**2+G(3)**2+H(3)**2)   ! DIPMOM in (nT RE^3)
   xme=DIPMOM*re_m**3*1.e-9               ! dipole moment in (T m^3)
   write(*,*) 'xme ',xme
+
+! MATE exosphere model
+  if (igeo==3) call read_mate_data
+  TimeMate=TimeMate+float(iday-iDoyStartMate)*86400.
 
 ! Find location of dipole north in geographic coordinates: elon,ctp,stp
   xmag=0.
@@ -1493,9 +1499,7 @@
   if (iHband==0) then
      iHband=1
   endif
-   print*, "iEMICdiff = ", iEMICdiff
   if (iEMICdiff>0) then
-   print*, "iEMICdiff = ", iEMICdiff
      do iband=1,2   ! 1=H-band, 2=He-band
         do n=1,ijs 
            if (iband==1.and.js(n)==1) then
@@ -1736,6 +1740,7 @@
   use cinitial,only : f2
   use rcmgrid,only : jdim,jdif
   use ModCurvScatt, only: iflc,tflc,calc_flc_para,calc_Daa_flc,Daa_flc
+  use ModMate, only: mate_geocorona 
   parameter (np=1000)
   integer indx(np),iba0(ip),mstop(4)
   real xk3(np),bm1(np),rm(np),xa(np),ya(np),za(np),dss(np),dssi(np),yint(np),&
@@ -2106,11 +2111,13 @@
 
         ! Set up arrarys at trace grids
         xk3(im2)=0.               ! mirroring around Bmin
-        call geocorona(igeo,xa(im2),ya(im2),za(im2),h3(im2))
+        !call geocorona(igeo,xa(im2),ya(im2),za(im2),h3(im2))
+        call geocorona(igeo,t,xa(im2),ya(im2),za(im2),h3(im2))
         do ngrid=1,im2-1   
            n8=n+1       !  initial value
            line_integral: do ii=ngrid,n
-              call geocorona(igeo,xs(ii),ys(ii),zs(ii),hden)    
+              !call geocorona(igeo,xs(ii),ys(ii),zs(ii),hden)    
+              call geocorona(igeo,t,xs(ii),ys(ii),zs(ii),hden)    
               bsi=bs(ii)
               if (bm1(ii+1).ge.bm1(ngrid)) bsi=0.5*(bm1(ngrid)+bm1(ii))
               yint(ii)=sqrt(bm1(ngrid)-bsi)
@@ -5875,14 +5882,12 @@ end subroutine diffuse_flc
               if (icP.eq.1) call ChorusBpower_GN(ro1,xmlt1,iae,CHpower1)
               if (icP.eq.2) &   
                  call lintp2(LcBU,MLTBU,Cpower2DB,kLB,kltB+1,ro1,xmlt1,CHpower1)
-              if (icP .ge. 3) then
-                 if (icP.ge.3.and.ro1.le.LcAr(kLA)) &   
-                    call lintp2(LcAr,MLTAr,Cpower2DA,kLA,kltA+1,ro1,xmlt1,CHpower1)
-                 if (icP.eq.3.and.ro1.gt.LcAr(kLA)) &   
-                    call ChorusBpower_GN(ro1,xmlt1,iae,CHpower1)
-                 if (icP.eq.4.and.ro1.gt.LcAr(kLA)) &   
-                    call lintp2(LcBU,MLTBU,Cpower2DB,kLB,kltB+1,ro1,xmlt1,CHpower1)
-              endif
+              if (icP.ge.3.and.ro1.le.LcAr(kLA)) &   
+                 call lintp2(LcAr,MLTAr,Cpower2DA,kLA,kltA+1,ro1,xmlt1,CHpower1)
+              if (icP.eq.3.and.ro1.gt.LcAr(kLA)) &   
+                 call ChorusBpower_GN(ro1,xmlt1,iae,CHpower1)
+              if (icP.eq.4.and.ro1.gt.LcAr(kLA)) &   
+                 call lintp2(LcBU,MLTBU,Cpower2DB,kLB,kltB+1,ro1,xmlt1,CHpower1)
               CHpowerL(i,j,n)=CHpower1
            endif
         enddo
@@ -6338,7 +6343,7 @@ end subroutine diffuse_flc
 
 
 !--------------------------------------------------------------------------
-      subroutine geocorona(igeo,xsm,ysm,zsm,hden)
+      subroutine geocorona(igeo,t,xsm,ysm,zsm,hden)
 !--------------------------------------------------------------------------
 ! Routine calculates geocorona density. 
 !
@@ -6350,9 +6355,10 @@ end subroutine diffuse_flc
 ! output: hden (H density in m^-3)
    
   use hodges_data
+  use ModMate, only: mate_geocorona
   implicit none
   integer igeo
-  real xsm,ysm,zsm,hden,radius,rexob,rr,ar,ch0,ch1,ch2
+  real t,xsm,ysm,zsm,hden,radius,rexob,rr,ar,ch0,ch1,ch2
 
   radius=sqrt(xsm*xsm+ysm*ysm+zsm*zsm)
 
@@ -6374,7 +6380,10 @@ end subroutine diffuse_flc
 
 ! Hodges model of [H] when igeo=2
   if (igeo.eq.2) call hodges_geocorona(xsm,ysm,zsm,hden)
- 
+
+! MATE [H] density in /cm3
+  if (igeo.eq.3) call mate_geocorona(t,xsm,ysm,zsm,hden)
+
 ! Convert hden in m^-3
   hden=hden*1.e6        ! H density in m^-3
             
